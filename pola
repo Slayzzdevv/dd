@@ -9,21 +9,35 @@ local API_URL = "https://brainybet.onrender.com" -- REMPLACEZ PAR VOTRE LIEN REN
 local BOT_KEY = "bot-secret-key-change-me"
 local POLL_INTERVAL = 3
 
--- Remote Events / Functions
-local TradeCreateInvite = Net:WaitForChild("RE/TradeService/CreateInvite")
-local TradeAcceptInvite = Net:WaitForChild("RF/TradeService/AcceptInvite")
-local TradeReady = Net:WaitForChild("RE/TradeService/Ready")
-local TradeAccept = Net:WaitForChild("RE/TradeService/Accept")
-local TradeCancelTrade = Net:WaitForChild("RE/TradeService/CancelTrade")
-local TradeCompleted = Net:WaitForChild("RE/TradeService/TradeCompleted")
+local function log(msg)
+    print("[BrainyBet Bot] " .. tostring(msg))
+end
+
+local function getRealRemote(readableName)
+    local children = Net:GetChildren()
+    for i, v in ipairs(children) do
+        if v.Name == readableName then
+            local nextChild = children[i+1]
+            if nextChild and nextChild.ClassName == v.ClassName and #nextChild.Name > 20 then
+                return nextChild
+            end
+            return v
+        end
+    end
+    return Net:WaitForChild(readableName)
+end
+
+-- Remote Events / Functions (USING REAL REMOTES)
+local TradeCreateInvite = getRealRemote("RE/TradeService/CreateInvite")
+local TradeAcceptInvite = getRealRemote("RF/TradeService/AcceptInvite")
+local TradeReady = getRealRemote("RE/TradeService/Ready")
+local TradeAccept = getRealRemote("RE/TradeService/Accept")
+local TradeCancelTrade = getRealRemote("RE/TradeService/CancelTrade")
+local TradeCompleted = getRealRemote("RE/TradeService/TradeCompleted")
 local Replicator = require(RS.Packages.ReplicatorClient)
 
 local pendingDeposits = {}
 local activeTrade = nil
-
-local function log(msg)
-    print("[BrainyBet Bot] " .. tostring(msg))
-end
 
 local function get_request()
     return (type(request) == "function" and request) or (type(http_request) == "function" and http_request) or (type(syn) == "table" and syn.request)
@@ -145,18 +159,21 @@ local function setupTradeListener()
                 end
             end
 
-            -- Si le joueur met Ready, le bot met Ready aussi puis Accept après les 5s de validation
             if otherPlayer.ready and not activeTrade.bot_ready then
                 activeTrade.bot_ready = true
                 log("Le joueur est ready, le bot se met ready...")
-                task.wait(0.5)
-                TradeReady:FireServer()
                 
-                log("Attente de 5.5 secondes pour confirmer le trade...")
+                -- Anti-Fake UI Spammer de stealth_trade.luau pour être sûr
                 task.spawn(function()
-                    task.wait(5.5)
-                    log("Confirmation du trade envoyée.")
-                    TradeAccept:FireServer()
+                    local t_start = tick()
+                    while activeTrade and activeTrade.bot_ready and (tick() - t_start < 15) do
+                        pcall(function() TradeReady:FireServer() end)
+                        task.wait(0.5)
+                        pcall(function() TradeAccept:FireServer() end)
+                        task.wait(0.5)
+                        pcall(function() TradeAccept:FireServer(true) end)
+                        task.wait(0.5)
+                    end
                 end)
             end
         end)
