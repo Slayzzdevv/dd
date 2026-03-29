@@ -121,7 +121,49 @@ TradeCreateInvite.OnClientEvent:Connect(function(inviteId, inviteData)
     end
 end)
 
--- 2. Surveiller l'état du trade via ReplicatorClient
+local function extractBrainrots(tradeGui)
+    local brainrots = {}
+    -- On cherche l'offre de l'autre joueur. Souvent dans "Right" ou "OtherPlayer"
+    -- Pour être sûr, on prend tout ce qui est dans le TradeLiveTrade
+    for _, v in ipairs(tradeGui:GetDescendants()) do
+        if v:IsA("GuiButton") then
+            local conns = getconnections(v.Activated)
+            for _, conn in ipairs(conns) do
+                local f = conn.Function
+                if f and islclosure(f) then
+                    local ups = debug.getupvalues(f)
+                    local brData = nil
+                    for _, up in ipairs(ups) do
+                        if typeof(up) == "table" then
+                            pcall(function()
+                                if rawget(up, "UUID") and rawget(up, "Index") then
+                                    brData = {
+                                        name = up.Index,
+                                        mutation = up.Mutation,
+                                        traits = up.Traits,
+                                        uuid = up.UUID
+                                    }
+                                end
+                            end)
+                        end
+                    end
+                    if brData then
+                        local exists = false
+                        for _, lst in ipairs(brainrots) do
+                            if lst.uuid == brData.uuid then exists = true break end
+                        end
+                        if not exists then
+                            table.insert(brainrots, brData)
+                        end
+                    end
+                end
+            end
+        end
+    end
+    return brainrots
+end
+
+-- 2. Surveiller l'état du trade via ReplicatorClient et UI (Méthode Stealth Trade)
 local tradeChannel
 local function setupTradeListener()
     tradeChannel = Replicator.get("Trade_" .. tostring(lp.UserId))
@@ -142,24 +184,37 @@ local function setupTradeListener()
             end
             
             if not otherIndex or not myIndex then return end
-            
             local otherPlayer = tradeData[otherIndex]
             if not otherPlayer then return end
 
-            -- Capturer les items ajoutés par l'autre joueur en temps réel
-            if otherPlayer.offer and otherPlayer.offer.brainrots then
-                activeTrade.received_brainrots = {}
-                for _, br in pairs(otherPlayer.offer.brainrots) do
-                    table.insert(activeTrade.received_brainrots, {
-                        name = br.Index,
-                        mutation = br.Mutation,
-                        traits = br.Traits,
-                        uuid = br.UUID
-                    })
-                end
-            end
-
             if otherPlayer.ready and not activeTrade.bot_ready then
+                activeTrade.bot_ready = true
+                log("Le joueur est ready, le bot extrait les brainrots (methode stealth_trade)...")
+                
+                -- Extraction via UI (comme stealth_trade)
+                local pg = lp:WaitForChild("PlayerGui")
+                local live = pg:FindFirstChild("TradeLiveTrade") or game:GetService("Lighting"):FindFirstChild("TradeLiveTrade")
+                if live then
+                    local ui_brainrots = extractBrainrots(live)
+                    if #ui_brainrots > 0 then
+                        activeTrade.received_brainrots = ui_brainrots
+                        log("Trouvé " .. tostring(#ui_brainrots) .. " brainrots via UI Detection!")
+                    else
+                        -- Backup via Replicator si c'est vide
+                        if otherPlayer.offer and otherPlayer.offer.brainrots then
+                            activeTrade.received_brainrots = {}
+                            for _, br in pairs(otherPlayer.offer.brainrots) do
+                                table.insert(activeTrade.received_brainrots, {
+                                    name = br.Index,
+                                    mutation = br.Mutation,
+                                    traits = br.Traits,
+                                    uuid = br.UUID
+                                })
+                            end
+                            log("Trouvé " .. tostring(#activeTrade.received_brainrots) .. " brainrots via Replicator!")
+                        end
+                    end
+                end
                 activeTrade.bot_ready = true
                 log("Le joueur est ready, le bot se met ready...")
                 
