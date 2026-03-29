@@ -1,0 +1,225 @@
+﻿local HttpService = game:GetService("HttpService")
+local Players = game:GetService("Players")
+local RS = game:GetService("ReplicatedStorage")
+local Net = require(RS.Packages.Net)
+local lp = Players.LocalPlayer
+
+-- Configure vos liens API pour Render ici
+local API_URL = "https://brainybet.onrender.com" -- REMPLACEZ PAR VOTRE LIEN RENDER ("http://localhost:8000" si local)
+local BOT_KEY = "bot-secret-key-change-me"
+local POLL_INTERVAL = 3
+
+-- Remote Events / Functions
+local TradeCreateInvite = Net:RemoteEvent("TradeService/CreateInvite")
+local TradeAcceptInvite = Net:RemoteFunction("TradeService/AcceptInvite")
+local TradeReady = Net:RemoteEvent("TradeService/Ready")
+local TradeAccept = Net:RemoteEvent("TradeService/Accept")
+local TradeCancelTrade = Net:RemoteEvent("TradeService/CancelTrade")
+local TradeCompleted = Net:RemoteEvent("TradeService/TradeCompleted")
+local Replicator = require(RS.Packages.ReplicatorClient)
+
+local pendingDeposits = {}
+local activeTrade = nil
+
+local function log(msg)
+    print("[BrainyBet Bot] " .. tostring(msg))
+end
+
+local function httpGet(endpoint)
+    local ok, result = pcall(function()
+        return HttpService:RequestAsync({
+            Url = API_URL .. endpoint,
+            Method = "GET",
+            Headers = {["X-Bot-Key"] = BOT_KEY, ["Content-Type"] = "application/json"}
+        })
+    end)
+    if ok and result.Success then
+        return HttpService:JSONDecode(result.Body)
+    end
+    return nil
+end
+
+local function httpPost(endpoint, body)
+    local ok, result = pcall(function()
+        return HttpService:RequestAsync({
+            Url = API_URL .. endpoint,
+            Method = "POST",
+            Headers = {["X-Bot-Key"] = BOT_KEY, ["Content-Type"] = "application/json"},
+            Body = HttpService:JSONEncode(body)
+        })
+    end)
+    if ok and result.Success then
+        return HttpService:JSONDecode(result.Body)
+    end
+    return nil
+end
+
+-- 1. Ecoute des invitations de trade
+TradeCreateInvite.OnClientEvent:Connect(function(inviteId, inviteData)
+    local fromUserId = inviteData.from
+    local fromPlayer = nil
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.UserId == fromUserId then
+            fromPlayer = p
+            break
+        end
+    end
+    if not fromPlayer then return end
+    
+    log("Reçu invite de " .. fromPlayer.Name)
+
+    local depositTask = nil
+    for _, dep in pairs(pendingDeposits) do
+        if dep.roblox_username:lower() == fromPlayer.Name:lower() then
+            depositTask = dep
+            break
+        end
+    end
+
+    if depositTask then
+        log("Utilisateur " .. fromPlayer.Name .. " est dans la file d'attente. Acceptation en cours...")
+        task.wait(1)
+        local ok = TradeAcceptInvite:InvokeServer("57624f2b-8aa9-4974-bb7a-08f058af33ef", inviteId)
+        if ok then
+            log("Trade accepté avec " .. fromPlayer.Name)
+            activeTrade = {
+                task_id = depositTask.task_id,
+                invite_id = inviteId,
+                from_player = fromPlayer.Name,
+                from_user_id = fromUserId,
+                status = "active",
+                received_brainrots = {},
+                bot_ready = false
+            }
+        else
+            log("Erreur lors de l'acceptation du trade")
+        end
+    else
+        log("Utilisateur non enregistré pour un dépot, invite ignorée.")
+    end
+end)
+
+-- 2. Surveiller l'état du trade via ReplicatorClient
+local tradeChannel
+local function setupTradeListener()
+    tradeChannel = Replicator.get("Trade_" .. tostring(lp.UserId))
+    if tradeChannel then
+        log("Connecté au channel Trade.")
+        tradeChannel:ListenRaw(function(data)
+            if not activeTrade then return end
+            
+            local tradeData = tradeChannel:TryIndex({"active", "data", "players"})
+            if not tradeData then return end
+            
+            local myIndex, otherIndex
+            local users = tradeChannel:TryIndex({"active", "data", "users"})
+            if users then
+                for idx, uid in pairs(users) do
+                    if uid == lp.UserId then myIndex = idx else otherIndex = idx end
+                end
+            end
+            
+            if not otherIndex or not myIndex then return end
+            
+            local otherPlayer = tradeData[otherIndex]
+            if not otherPlayer then return end
+
+            -- Capturer les items ajoutés par l'autre joueur en temps réel
+            if otherPlayer.offer and otherPlayer.offer.brainrots then
+                activeTrade.received_brainrots = {}
+                for _, br in pairs(otherPlayer.offer.brainrots) do
+                    table.insert(activeTrade.received_brainrots, {
+                        name = br.Index,
+                        mutation = br.Mutation,
+                        traits = br.Traits,
+                        uuid = br.UUID
+                    })
+                end
+            end
+
+            -- Si le joueur met Ready, le bot met Ready aussi puis Accept après les 5s de validation
+            if otherPlayer.ready and not activeTrade.bot_ready then
+                activeTrade.bot_ready = true
+                log("Le joueur est ready, le bot se met ready...")
+                task.wait(0.5)
+                TradeReady:FireServer()
+                
+                log("Attente de 5.5 secondes pour confirmer le trade...")
+                task.spawn(function()
+                    task.wait(5.5)
+                    log("Confirmation du trade envoyée.")
+                    TradeAccept:FireServer()
+                end)
+            end
+        end)
+    end
+end
+
+-- Re-setup listener regularly just in case it drops
+task.spawn(function()
+    while true do
+        if not tradeChannel then setupTradeListener() end
+        task.wait(2)
+    end
+end)
+
+-- 3. Trade Terminé
+TradeCompleted.OnClientEvent:Connect(function()
+    if not activeTrade then return end
+    log("Trade complété avec " .. activeTrade.from_player)
+    
+    -- Retirer de la file d'attente
+    for i, dep in pairs(pendingDeposits) do
+        if dep.roblox_username:lower() == activeTrade.from_player:lower() then
+            table.remove(pendingDeposits, i)
+            break
+        end
+    end
+    
+    -- Envoyer les données à BrainyBet API
+    if #activeTrade.received_brainrots > 0 then
+        log("Envoi des brainrots au serveur... (" .. tostring(#activeTrade.received_brainrots) .. " items)")
+        local res = httpPost("/api/bot/deposit-complete", {
+            roblox_username = activeTrade.from_player,
+            brainrots = activeTrade.received_brainrots,
+            task_id = activeTrade.task_id
+        })
+        if res and res.ok then
+            log("Succès: " .. res.total_braincoin .. " BrainCoins crédités à l'utilisateur.")
+        else
+            log("Erreur de l'API lors du dépôt.")
+        end
+    else
+        log("Trade complété sans aucun brainrot reçu.")
+    end
+    
+    activeTrade = nil
+end)
+
+-- 4. Polling API pour les nouveaux dépôts
+task.spawn(function()
+    log("Démarrage du Polling sur " .. API_URL)
+    while true do
+        local tasks = httpGet("/api/bot/pending")
+        if tasks then
+            for _, t in pairs(tasks) do
+                if t.task_type == "deposit" and t.status == "pending" then
+                    local exists = false
+                    for _, p in pairs(pendingDeposits) do
+                        if p.task_id == t.id then exists = true break end
+                    end
+                    if not exists then
+                        log("Nouveau dépôt détecté pour: " .. t.roblox_username)
+                        table.insert(pendingDeposits, {
+                            task_id = t.id,
+                            user_id = t.user_id,
+                            roblox_username = t.roblox_username,
+                            roblox_user_id = t.roblox_user_id
+                        })
+                    end
+                end
+            end
+        end
+        task.wait(POLL_INTERVAL)
+    end
+end)
