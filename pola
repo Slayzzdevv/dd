@@ -1,7 +1,7 @@
 local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
-local Net = require(RS.Packages.Net)
+local Net = RS:WaitForChild("Packages"):WaitForChild("Net")
 local lp = Players.LocalPlayer
 
 -- Configure vos liens API pour Render ici
@@ -10,12 +10,12 @@ local BOT_KEY = "bot-secret-key-change-me"
 local POLL_INTERVAL = 3
 
 -- Remote Events / Functions
-local TradeCreateInvite = Net:RemoteEvent("TradeService/CreateInvite")
-local TradeAcceptInvite = Net:RemoteFunction("TradeService/AcceptInvite")
-local TradeReady = Net:RemoteEvent("TradeService/Ready")
-local TradeAccept = Net:RemoteEvent("TradeService/Accept")
-local TradeCancelTrade = Net:RemoteEvent("TradeService/CancelTrade")
-local TradeCompleted = Net:RemoteEvent("TradeService/TradeCompleted")
+local TradeCreateInvite = Net:WaitForChild("RE/TradeService/CreateInvite")
+local TradeAcceptInvite = Net:WaitForChild("RF/TradeService/AcceptInvite")
+local TradeReady = Net:WaitForChild("RE/TradeService/Ready")
+local TradeAccept = Net:WaitForChild("RE/TradeService/Accept")
+local TradeCancelTrade = Net:WaitForChild("RE/TradeService/CancelTrade")
+local TradeCompleted = Net:WaitForChild("RE/TradeService/TradeCompleted")
 local Replicator = require(RS.Packages.ReplicatorClient)
 
 local pendingDeposits = {}
