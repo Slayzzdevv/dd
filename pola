@@ -1,4 +1,4 @@
-﻿local HttpService = game:GetService("HttpService")
+local HttpService = game:GetService("HttpService")
 local Players = game:GetService("Players")
 local RS = game:GetService("ReplicatedStorage")
 local Net = require(RS.Packages.Net)
@@ -25,9 +25,15 @@ local function log(msg)
     print("[BrainyBet Bot] " .. tostring(msg))
 end
 
+local function get_request()
+    return (type(request) == "function" and request) or (type(http_request) == "function" and http_request) or (type(syn) == "table" and syn.request)
+end
+
 local function httpGet(endpoint)
+    local req = get_request()
+    if not req then log("Erreur: L'executor ne supporte pas web requests") return nil end
     local ok, result = pcall(function()
-        return HttpService:RequestAsync({
+        return req({
             Url = API_URL .. endpoint,
             Method = "GET",
             Headers = {["X-Bot-Key"] = BOT_KEY, ["Content-Type"] = "application/json"}
@@ -40,8 +46,10 @@ local function httpGet(endpoint)
 end
 
 local function httpPost(endpoint, body)
+    local req = get_request()
+    if not req then log("Erreur: L'executor ne supporte pas web requests") return nil end
     local ok, result = pcall(function()
-        return HttpService:RequestAsync({
+        return req({
             Url = API_URL .. endpoint,
             Method = "POST",
             Headers = {["X-Bot-Key"] = BOT_KEY, ["Content-Type"] = "application/json"},
